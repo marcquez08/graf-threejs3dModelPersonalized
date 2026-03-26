@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - FBX loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+
+	<body>
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> - FBXLoader<br />
+			Character and animation from <a href="https://www.mixamo.com/" target="_blank" rel="noopener">Mixamo</a>
+		</div>
+
+		<script type="importmap">
+			{
+				"imports": {
+					"three": "../build/three.module.js",
+					"three/addons/": "./jsm/"
+				}
+			}
+		</script>
+
+		<script type="module">
+
+			import * as THREE from 'three';
+
+			import Stats from 'three/addons/libs/stats.module.js';
+
+			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+			import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+			import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+			const manager = new THREE.LoadingManager();
+
+			let camera, scene, renderer, stats, object, loader, guiMorphsFolder;
+			let mixer;
+
+			const timer = new THREE.Timer();
+			timer.connect( document );
+
+			const params = {
+				asset: 'robotHipHopDance'
+			};
+
+			const assets = [
+				'robotHipHopDance',
+			];
+
+			// =========================================================
+			// AQUÍ DEBES ASEGURARTE DE PONER LA RUTA DE TU IMAGEN
+			// DE TEXTURA / MATERIAL ENVOLVENTE PARA EL MODELO FBX
+			// Ejemplo: 'textures/ropa_personaje.jpg'
+			// =========================================================
+			const texturePath = 'textures/azul.png';
+
+			// Cargador de texturas
+			const textureLoader = new THREE.TextureLoader( manager );
+
+			// Variable global para reutilizar la textura
+			let externalTexture = null;
+
+
+			init();
+
+			function init() {
+
+				const container = document.createElement( 'div' );
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 1, 2000 );
+				camera.position.set( 100, 200, 300 );
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0xa0a0a0 );
+				scene.fog = new THREE.Fog( 0xa0a0a0, 200, 1000 );
+
+				// Luz ambiental hemisférica suave
+				const hemiLight = new THREE.HemisphereLight( 0xffffff, 0x444444, 5 );
+				hemiLight.position.set( 0, 200, 0 );
+				scene.add( hemiLight );
+
+				// Luz direccional general
+				const dirLight = new THREE.DirectionalLight( 0xffffff, 5 );
+				dirLight.position.set( 0, 200, 100 );
+				dirLight.castShadow = true;
+				dirLight.shadow.camera.top = 180;
+				dirLight.shadow.camera.bottom = - 100;
+				dirLight.shadow.camera.left = - 120;
+				dirLight.shadow.camera.right = 120;
+				scene.add( dirLight );
+
+				// =========================================================
+				// Luz superior adicional para proyectar sombra hacia abajo
+				// =========================================================
+				const topLight = new THREE.SpotLight( 0xffffff, 4 );
+				topLight.position.set( 0, 350, 0 );
+				topLight.angle = Math.PI / 6;
+				topLight.penumbra = 0.35;
+				topLight.decay = 2;
+				topLight.distance = 1200;
+				topLight.castShadow = true;
+				topLight.shadow.mapSize.width = 2048;
+				topLight.shadow.mapSize.height = 2048;
+				topLight.shadow.bias = -0.0001;
+				topLight.target.position.set( 0, 0, 0 );
+				scene.add( topLight );
+				scene.add( topLight.target );
+
+				// scene.add( new THREE.CameraHelper( dirLight.shadow.camera ) );
+
+				// ground
+				const mesh = new THREE.Mesh( new THREE.PlaneGeometry( 2000, 2000 ), new THREE.MeshPhongMaterial( { color: 0x999999, depthWrite: false } ) );
+				mesh.rotation.x = - Math.PI / 2;
+				mesh.receiveShadow = true;
+				scene.add( mesh );
+
+				const grid = new THREE.GridHelper( 2000, 20, 0x000000, 0x000000 );
+				grid.material.opacity = 0.2;
+				grid.material.transparent = true;
+				scene.add( grid );
+
+				// Cargar la textura externa una sola vez
+				externalTexture = textureLoader.load( texturePath );
+				externalTexture.colorSpace = THREE.SRGBColorSpace;
+				externalTexture.wrapS = THREE.RepeatWrapping;
+				externalTexture.wrapT = THREE.RepeatWrapping;
+				externalTexture.repeat.set( 1, 1 );
+			
+				loader = new FBXLoader( manager );
+				loadAsset( params.asset );
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.setAnimationLoop( animate );
+				renderer.shadowMap.enabled = true;
+				container.appendChild( renderer.domElement );
+
+				const controls = new OrbitControls( camera, renderer.domElement );
+				controls.target.set( 0, 100, 0 );
+				controls.update();
+
+				window.addEventListener( 'resize', onWindowResize );
+
+
+
+				// stats
+				stats = new Stats();
+				container.appendChild( stats.dom );
+
+				const gui = new GUI();
+				gui.add( params, 'asset', assets ).onChange( function ( value ) {
+
+					loadAsset( value );
+
+				} );
+
+				guiMorphsFolder = gui.addFolder( 'Morphs' ).hide();
+
+			}
+
+			function loadAsset( asset ) {
+
+				loader.load( 'models/fbx/' + asset + '.fbx', function ( group ) {
+
+					if ( object ) {
+
+						object.traverse( function ( child ) {
+
+							if ( child.isSkinnedMesh ) {
+
+								child.skeleton.dispose();
+
+							}
+
+							if ( child.material ) {
+
+								const materials = Array.isArray( child.material ) ? child.material : [ child.material ];
+								materials.forEach( material => {
+
+									if ( material.map ) material.map.dispose();
+									material.dispose();
+			
+								} );
+			
+							}
+			
+							if ( child.geometry ) child.geometry.dispose();
+
+						} );
+
+						scene.remove( object );
+
+					}
+
+					//
+
+					object = group;
+
+					if ( object.animations && object.animations.length ) {
+
+						mixer = new THREE.AnimationMixer( object );
+
+						const action = mixer.clipAction( object.animations[ 0 ] );
+						action.play();
+
+					} else {
+
+						mixer = null;
+
+					}
+
+					guiMorphsFolder.children.forEach( ( child ) => child.destroy() );
+					guiMorphsFolder.hide();
+
+					object.traverse( function ( child ) {
+
+						if ( child.isMesh ) {
+
+							child.castShadow = true;
+							child.receiveShadow = true;
+
+							// =====================================================
+							// APLICACIÓN DE TEXTURA EXTERNA AL MODELO FBX
+							// Si tu FBX tiene UVs correctos, esta imagen envolverá
+							// el modelo como material visible.
+							// =====================================================
+							const originalMaterial = child.material;
+
+							child.material = new THREE.MeshStandardMaterial( {
+								map: externalTexture,
+								color: 0xffffff,
+								skinning: child.isSkinnedMesh,
+								morphTargets: !!child.morphTargetDictionary,
+								metalness: 0.8,
+								roughness: 0.5
+							} );							
+
+							// Si quieres conservar algunas propiedades del material original:
+							if ( originalMaterial ) {
+								child.material.side = originalMaterial.side ?? THREE.FrontSide;
+							}
+
+							if ( child.morphTargetDictionary ) {
+
+								guiMorphsFolder.show();
+								const meshFolder = guiMorphsFolder.addFolder( child.name || child.uuid );
+								Object.keys( child.morphTargetDictionary ).forEach( ( key ) => {
+			
+									meshFolder.add( child.morphTargetInfluences, child.morphTargetDictionary[ key ], 0, 1, 0.01 );
+			
+								} );
+			
+							}
+
+						}
+
+					} );
+
+					scene.add( object );
+
+				} );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			}
+
+			//
+
+			function animate() {
+
+				timer.update();
+
+				const delta = timer.getDelta();
+
+				if ( mixer ) mixer.update( delta );
+
+				renderer.render( scene, camera );
+
+				stats.update();
+
+			}
+
+		</script>
+
+	</body>
+</html>
